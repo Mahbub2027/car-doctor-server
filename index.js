@@ -2,13 +2,45 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 const app = express();
 const port = process.env.port || 5000;
 
 //middleware
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:5174'],
+    // credentials: true
+    credentials: true
+}));
 app.use(express.json());
+app.use(cookieParser());
 
+
+// middleware own create
+const logger = async(req, res, next)=>{
+    console.log('called: ', req.host, req.originalUrl)
+    next();
+}
+const verifyToken = async(req, res, next) =>{
+    const token = req.cookies?.token;
+    console.log("verify token middleware: ", token)
+    if(!token){
+        return res.status(401).send({message: 'Unauthorized'})
+    }
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decode)=>{
+        //err
+        if(err){
+            console.log(err);
+            return res.status(401).send({message: 'not authorized'})
+        }
+        // if the token is valid then it would be decode
+        console.log('value in the token: ', decode)
+        req.user = decode;
+        next();
+    })
+    
+}
 
 console.log(process.env.DB_USER)
 
@@ -31,6 +63,22 @@ async function run() {
         const serviceCollection = client.db('carDoctor').collection('services');
         const bookCollection = client.db('carDoctor').collection('bookings');
 
+        // jwt apt
+        app.post('/jwt', logger, async(req, res)=>{
+            const user = req.body;
+            console.log(user)
+            const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+                expiresIn: '6h'
+            });
+            res
+                .cookie('token', token, {
+                    httpOnly: true,
+                    secure: false
+                })
+                .send({success: true});
+        })
+
+        // services related api
         app.get('/services/:id', async(req, res)=>{
             const id = req.params.id;
 
@@ -45,15 +93,20 @@ async function run() {
         })
 
 
-        app.get('/services', async(req, res)=>{
+        app.get('/services', logger, async(req, res)=>{
             const cursor = serviceCollection.find();
             const result= await cursor.toArray();
             res.send(result);
         })
 
-        // insert checkout book 
-        app.get('/bookings', async(req, res)=>{
+        // insert checkout bookings 
+        app.get('/bookings', logger, verifyToken, async(req, res)=>{
             console.log(req.query.email);
+            // console.log('tok tok token', req.cookies.token)
+            console.log('Valid user in the token', req.user);
+            if(req.query.email !== req.user.email){
+                return res.status(403).send({message: 'forbidden access'})
+            }
             let query = {};
             if(req.query?.email){
                 query= {email: req.query.email}
